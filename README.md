@@ -249,7 +249,7 @@ For time ranges:
 
 ```bash
 # Clone the repository
-git clone https://github.com/weiyilan/mcp-chinese-time.git
+git clone https://github.com/wyl116/mcp-chinese-time.git
 cd mcp-chinese-time
 
 # Install development dependencies

@@ -45,9 +45,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/weiyilan/mcp-chinese-time"
-Repository = "https://github.com/weiyilan/mcp-chinese-time"
-Issues = "https://github.com/weiyilan/mcp-chinese-time/issues"
+Homepage = "https://github.com/wyl116/mcp-chinese-time"
+Repository = "https://github.com/wyl116/mcp-chinese-time"
+Issues = "https://github.com/wyl116/mcp-chinese-time/issues"
 
 [project.scripts]
 mcp-chinese-time = "mcp_chinese_time:main"
