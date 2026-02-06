@@ -182,6 +182,7 @@ class FuzzyTimeParser:
         parsers = [
             self._parse_range,
             self._parse_holiday,
+            self._parse_date_time_combined,
             self._parse_relative_day,
             self._parse_weekday,  # Before relative_week to handle "上周三" vs "上周"
             self._parse_relative_week,
@@ -234,6 +235,44 @@ class FuzzyTimeParser:
             return dt.strftime("%Y-%m-%d")
         return dt.strftime("%Y-%m-%d %H:%M:%S")
 
+    def _build_datetime_result(
+        self,
+        year: int,
+        month: int,
+        day: int,
+        period: Optional[str],
+        hour_str: str,
+        minute_str: Optional[str],
+        expr: str,
+        confidence: float = 1.0,
+    ) -> Optional[ParsedTime]:
+        """Build ParsedTime from date and time components."""
+        hour = self._cn_to_num(hour_str)
+        minute = self._cn_to_num(minute_str) if minute_str else 0
+
+        if period:
+            if period in ("下午", "晚上") and hour < 12:
+                hour += 12
+            elif period == "凌晨" and hour == 12:
+                hour = 0
+
+        try:
+            target = datetime(year, month, day, hour, minute, tzinfo=self.tz)
+            return ParsedTime(
+                value=self._format_datetime(target, False),
+                is_range=False,
+                is_date_only=False,
+                original_expression=expr,
+                confidence=confidence,
+            )
+        except ValueError:
+            return None
+
+    def _is_time_only_expr(self, expr: str) -> bool:
+        """Check if expression is a time-only expression (no date component)."""
+        pattern = r"^(凌晨|早上|上午|中午|下午|晚上|深夜)?(\d+|[一二三四五六七八九十]+)点(?:(\d+|[一二三四五六七八九十]+)分?)?$"
+        return bool(re.match(pattern, expr))
+
     def _parse_range(self, expr: str) -> Optional[ParsedTime]:
         """Parse time range expressions like '昨天到今天'."""
         range_patterns = [
@@ -254,8 +293,20 @@ class FuzzyTimeParser:
                 end_result = self._parse_single(end_expr)
 
                 if start_result and end_result:
+                    start_str = start_result[0]
+                    end_str = end_result[0]
+
+                    # When end is a time-only expression (e.g., "8点"),
+                    # inherit the date from start (e.g., "1月5日 7点到8点")
+                    if (
+                        self._is_time_only_expr(end_expr)
+                        and len(start_str) >= 10
+                        and len(end_str) >= 10
+                    ):
+                        end_str = start_str[:10] + end_str[10:]
+
                     return ParsedTime(
-                        value=[start_result[0], end_result[0]],
+                        value=[start_str, end_str],
                         is_range=True,
                         is_date_only=start_result[1] and end_result[1],
                         original_expression=expr,
@@ -268,6 +319,7 @@ class FuzzyTimeParser:
         """Parse a single time expression. Returns (datetime_str, is_date_only, confidence)."""
         parsers = [
             self._parse_holiday,
+            self._parse_date_time_combined,
             self._parse_relative_day,
             self._parse_relative_week,
             self._parse_relative_month,
@@ -281,6 +333,101 @@ class FuzzyTimeParser:
             if result:
                 val = result.value if not isinstance(result.value, list) else result.value[0]
                 return (val, result.is_date_only, result.confidence)
+
+        return None
+
+    def _parse_date_time_combined(self, expr: str) -> Optional[ParsedTime]:
+        """
+        Parse combined date+time expressions like '1月5日 7点', '昨天下午3点'.
+
+        Handles:
+        - Specific date + time: "2024年1月5日 下午3点30分", "1月5日 7点", "15号 9点"
+        - Relative day + time: "昨天 7点", "明天下午3点", "后天上午9点"
+        """
+        time_pat = (
+            r"\s*(凌晨|早上|上午|中午|下午|晚上|深夜)?"
+            r"(\d+|[一二三四五六七八九十]+)点"
+            r"(?:(\d+|[一二三四五六七八九十]+)分?)?$"
+        )
+
+        # --- Specific date + time ---
+        # Full date: 2024年1月5日 7点
+        match = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})[日号]" + time_pat, expr)
+        if match:
+            result = self._build_datetime_result(
+                int(match.group(1)),
+                int(match.group(2)),
+                int(match.group(3)),
+                match.group(4),
+                match.group(5),
+                match.group(6),
+                expr,
+            )
+            if result:
+                return result
+
+        # Month+day: 1月5日 7点
+        match = re.match(r"(\d{1,2})月(\d{1,2})[日号]" + time_pat, expr)
+        if match:
+            result = self._build_datetime_result(
+                self.now.year,
+                int(match.group(1)),
+                int(match.group(2)),
+                match.group(3),
+                match.group(4),
+                match.group(5),
+                expr,
+            )
+            if result:
+                return result
+
+        # Day only: 15号 7点
+        match = re.match(r"(\d{1,2})[日号]" + time_pat, expr)
+        if match:
+            result = self._build_datetime_result(
+                self.now.year,
+                self.now.month,
+                int(match.group(1)),
+                match.group(2),
+                match.group(3),
+                match.group(4),
+                expr,
+            )
+            if result:
+                return result
+
+        # --- Relative day + time ---
+        day_map = {
+            "大前天": -3,
+            "大后天": 3,
+            "前天": -2,
+            "后天": 2,
+            "昨天": -1,
+            "昨日": -1,
+            "今天": 0,
+            "今日": 0,
+            "明天": 1,
+            "明日": 1,
+            "前日": -2,
+            "后日": 2,
+        }
+
+        for key, offset in day_map.items():
+            match = re.match(re.escape(key) + time_pat, expr)
+            if match:
+                target_date = (self.now + timedelta(days=offset)).date()
+                result = self._build_datetime_result(
+                    target_date.year,
+                    target_date.month,
+                    target_date.day,
+                    match.group(1),
+                    match.group(2),
+                    match.group(3),
+                    expr,
+                    confidence=0.95,
+                )
+                if result:
+                    return result
 
         return None
 
@@ -410,7 +557,7 @@ class FuzzyTimeParser:
         }
 
         for key, offset in day_map.items():
-            if expr == key or expr.startswith(key):
+            if expr == key:
                 target = self.now + timedelta(days=offset)
                 return ParsedTime(
                     value=self._format_datetime(target, True),
