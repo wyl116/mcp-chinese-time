@@ -3,7 +3,7 @@
 Unit tests for FuzzyTimeParser.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -278,6 +278,72 @@ class TestFuzzyTimeParser:
 
         assert result_shanghai.is_date_only is True
         assert result_utc.is_date_only is True
+
+
+class TestRecentPeriod:
+    """Test cases for recent/past period expressions like '最近一周', '过去三天'."""
+
+    @pytest.fixture
+    def parser(self):
+        return FuzzyTimeParser(timezone="Asia/Shanghai")
+
+    @pytest.fixture
+    def fixed_now(self):
+        return datetime(2024, 1, 15, 10, 30, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    def set_fixed_time(self, parser, fixed_now):
+        parser._now = fixed_now
+        parser.reset_now = lambda: None
+
+    def test_recent_one_week(self, parser, fixed_now):
+        """Test '最近一周' → [7 days ago, today]."""
+        self.set_fixed_time(parser, fixed_now)
+        result = parser.parse("最近一周")
+        assert result.is_range is True
+        assert result.confidence == 0.9
+        assert result.value == ["2024-01-08", "2024-01-15"]
+
+    def test_past_one_week(self, parser, fixed_now):
+        """Test '过去一周' → same as 最近一周."""
+        self.set_fixed_time(parser, fixed_now)
+        result = parser.parse("过去一周")
+        assert result.is_range is True
+        assert result.value == ["2024-01-08", "2024-01-15"]
+
+    def test_jin_one_week(self, parser, fixed_now):
+        """Test '近一周' → same as 最近一周."""
+        self.set_fixed_time(parser, fixed_now)
+        result = parser.parse("近一周")
+        assert result.is_range is True
+        assert result.value == ["2024-01-08", "2024-01-15"]
+
+    def test_recent_three_days(self, parser, fixed_now):
+        """Test '最近三天' → [3 days ago, today]."""
+        self.set_fixed_time(parser, fixed_now)
+        result = parser.parse("最近三天")
+        assert result.is_range is True
+        assert result.value == ["2024-01-12", "2024-01-15"]
+
+    def test_past_two_weeks(self, parser, fixed_now):
+        """Test '过去两周' → [14 days ago, today]."""
+        self.set_fixed_time(parser, fixed_now)
+        result = parser.parse("过去两周")
+        assert result.is_range is True
+        assert result.value == ["2024-01-01", "2024-01-15"]
+
+    def test_recent_two_months(self, parser, fixed_now):
+        """Test '最近两个月' → [2 months ago 1st, today]."""
+        self.set_fixed_time(parser, fixed_now)
+        result = parser.parse("最近两个月")
+        assert result.is_range is True
+        assert result.value == ["2023-11-01", "2024-01-15"]
+
+    def test_recent_half_month(self, parser, fixed_now):
+        """Test '最近半个月' → [15 days ago, today]."""
+        self.set_fixed_time(parser, fixed_now)
+        result = parser.parse("最近半个月")
+        assert result.is_range is True
+        assert result.value == ["2023-12-31", "2024-01-15"]
 
 
 class TestLunarHolidays:

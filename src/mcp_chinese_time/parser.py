@@ -183,6 +183,7 @@ class FuzzyTimeParser:
             self._parse_range,
             self._parse_holiday,
             self._parse_date_time_combined,
+            self._parse_recent_period,
             self._parse_relative_day,
             self._parse_weekday,  # Before relative_week to handle "上周三" vs "上周"
             self._parse_relative_week,
@@ -320,6 +321,7 @@ class FuzzyTimeParser:
         parsers = [
             self._parse_holiday,
             self._parse_date_time_combined,
+            self._parse_recent_period,
             self._parse_relative_day,
             self._parse_relative_week,
             self._parse_relative_month,
@@ -537,6 +539,61 @@ class FuzzyTimeParser:
     def _is_leap_year(self, year: int) -> bool:
         """Check if a year is a leap year."""
         return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+
+    def _parse_recent_period(self, expr: str) -> Optional[ParsedTime]:
+        """Parse recent/past period expressions like '最近一周', '过去三天', '近两个月'."""
+        pattern = r"(最近|过去|近)(\d+|半|[一二两三四五六七八九十]+)(天|日|周|个?星期|个?月)"
+        match = re.match(pattern, expr)
+        if not match:
+            return None
+
+        num_str = match.group(2)
+        unit = match.group(3)
+        today = self.now.date()
+
+        if num_str == "半":
+            if unit in ("个月", "月"):
+                delta = timedelta(days=15)
+            else:
+                return None
+        else:
+            num = self._cn_to_num(num_str)
+            if unit in ("天", "日"):
+                delta = timedelta(days=num)
+            elif unit in ("周", "星期", "个星期"):
+                delta = timedelta(weeks=num)
+            elif unit in ("月", "个月"):
+                # Go back N months: compute the 1st of that target month
+                year = self.now.year
+                month = self.now.month - num
+                while month < 1:
+                    month += 12
+                    year -= 1
+                start_date = datetime(year, month, 1, tzinfo=self.tz).date()
+                return ParsedTime(
+                    value=[
+                        start_date.strftime("%Y-%m-%d"),
+                        today.strftime("%Y-%m-%d"),
+                    ],
+                    is_range=True,
+                    is_date_only=True,
+                    original_expression=expr,
+                    confidence=0.9,
+                )
+            else:
+                return None
+
+        start_date = today - delta
+        return ParsedTime(
+            value=[
+                start_date.strftime("%Y-%m-%d"),
+                today.strftime("%Y-%m-%d"),
+            ],
+            is_range=True,
+            is_date_only=True,
+            original_expression=expr,
+            confidence=0.9,
+        )
 
     def _parse_relative_day(self, expr: str) -> Optional[ParsedTime]:
         """Parse relative day expressions like '昨天', '三天前'."""
